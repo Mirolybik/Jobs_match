@@ -1,0 +1,6 @@
+# Локальный HTTPS-стенд: Caddy выпускает сертификат от внутреннего CA.
+# Снаружи доступен по https://localhost:8443, внутри проксирует в app:3000.
+https://localhost {
+	tls internal
+	reverse_proxy app:3000
+}

@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# build
+dist/
+coverage/
+*.tsbuildinfo
+
+# env
+.env
+.env.*.local
+
+# исходное ТЗ
+/JobsMatch.pdf
+
+# logs
+*.log
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Prisma
+prisma/*.db
