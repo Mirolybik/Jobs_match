@@ -1,0 +1,259 @@
+// JobsMatch — схема данных.
+// Деньги храним в копейках, время — в минутах от начала суток (0..1440),
+// день недели — ISO: 1 = понедельник, 7 = воскресенье.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CANDIDATE
+  EMPLOYER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum CompanyStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum VacancyStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  REMOVED
+}
+
+enum ApplicationStatus {
+  PENDING
+  INVITED
+  REJECTED
+  WITHDRAWN
+}
+
+enum ComplaintStatus {
+  OPEN
+  RESOLVED
+  REJECTED
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  role         Role
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  candidateProfile       CandidateProfile?
+  company                Company?
+  refreshTokens          RefreshToken[]
+  complaints             Complaint[]             @relation("ComplaintAuthor")
+  applicationStatusEvents ApplicationStatusEvent[] @relation("ApplicationStatusActor")
+  auditLogs              AuditLog[]              @relation("AuditLogActor")
+
+  @@map("users")
+}
+
+model CandidateProfile {
+  id                    String   @id @default(uuid()) @db.Uuid
+  userId                String   @unique @map("user_id") @db.Uuid
+  fullName              String   @map("full_name")
+  phone                 String?
+  city                  String
+  about                 String?
+  minHourlyRateKopecks  Int?     @map("min_hourly_rate_kopecks")
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  availability AvailabilityInterval[]
+  applications Application[]
+
+  @@map("candidate_profiles")
+}
+
+model AvailabilityInterval {
+  id          String @id @default(uuid()) @db.Uuid
+  candidateId String @map("candidate_id") @db.Uuid
+  dayOfWeek   Int    @map("day_of_week")
+  startMinute Int    @map("start_minute")
+  endMinute   Int    @map("end_minute")
+
+  candidate CandidateProfile @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([candidateId, dayOfWeek, startMinute, endMinute])
+  @@index([candidateId, dayOfWeek])
+  @@map("availability_intervals")
+}
+
+model Company {
+  id          String        @id @default(uuid()) @db.Uuid
+  ownerId     String        @unique @map("owner_id") @db.Uuid
+  name        String
+  city        String
+  address     String
+  description String?
+  status      CompanyStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  owner     User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  vacancies Vacancy[]
+
+  @@map("companies")
+}
+
+model Vacancy {
+  id                    String        @id @default(uuid()) @db.Uuid
+  companyId             String        @map("company_id") @db.Uuid
+  title                 String
+  description           String
+  city                  String
+  address               String
+  hourlyRateKopecks     Int           @map("hourly_rate_kopecks")
+  responseDeadlineHours Int           @default(72) @map("response_deadline_hours")
+  status                VacancyStatus @default(DRAFT)
+  publishedAt           DateTime?     @map("published_at") @db.Timestamptz(3)
+  createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  schedule     VacancyInterval[]
+  applications Application[]
+  complaints   Complaint[]
+
+  @@index([status, city])
+  @@index([companyId, status])
+  @@map("vacancies")
+}
+
+model VacancyInterval {
+  id          String @id @default(uuid()) @db.Uuid
+  vacancyId   String @map("vacancy_id") @db.Uuid
+  dayOfWeek   Int    @map("day_of_week")
+  startMinute Int    @map("start_minute")
+  endMinute   Int    @map("end_minute")
+
+  vacancy Vacancy @relation(fields: [vacancyId], references: [id], onDelete: Cascade)
+
+  @@unique([vacancyId, dayOfWeek, startMinute, endMinute])
+  @@index([vacancyId, dayOfWeek])
+  @@map("vacancy_intervals")
+}
+
+model Application {
+  id                   String            @id @default(uuid()) @db.Uuid
+  vacancyId            String            @map("vacancy_id") @db.Uuid
+  candidateId          String            @map("candidate_id") @db.Uuid
+  status               ApplicationStatus @default(PENDING)
+
+  // Снимок условий вакансии на момент отклика (ТЗ, п. «Копия условий»).
+  snapshotRateKopecks     Int      @map("snapshot_rate_kopecks")
+  snapshotCity            String   @map("snapshot_city")
+  snapshotAddress         String   @map("snapshot_address")
+  snapshotSchedule        Json     @map("snapshot_schedule")
+  snapshotDeadlineHours   Int      @map("snapshot_deadline_hours")
+  snapshotTakenAt         DateTime @map("snapshot_taken_at") @db.Timestamptz(3)
+
+  deadlineAt DateTime  @map("deadline_at") @db.Timestamptz(3)
+  decidedAt  DateTime? @map("decided_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  vacancy   Vacancy          @relation(fields: [vacancyId], references: [id], onDelete: Cascade)
+  candidate CandidateProfile @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  complaints Complaint[]
+  statusHistory ApplicationStatusEvent[]
+
+  @@unique([vacancyId, candidateId])
+  @@index([candidateId, status])
+  @@index([vacancyId, status])
+  @@map("applications")
+}
+
+// История переходов статуса отклика — требование ТЗ «история статусов».
+model ApplicationStatusEvent {
+  id             String             @id @default(uuid()) @db.Uuid
+  applicationId  String             @map("application_id") @db.Uuid
+  status         ApplicationStatus
+  previousStatus ApplicationStatus? @map("previous_status")
+  actorId        String?            @map("actor_id") @db.Uuid
+  actorRole      Role?              @map("actor_role")
+  comment        String?
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  actor       User?       @relation("ApplicationStatusActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, createdAt])
+  @@map("application_status_events")
+}
+
+// Журнал значимых действий. ТЗ: «настроим HTTPS, права доступа и журнал».
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  actorRole  Role?    @map("actor_role")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id") @db.Uuid
+  metadata   Json?
+  ip         String?
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
+
+model Complaint {
+  id                String          @id @default(uuid()) @db.Uuid
+  authorId          String          @map("author_id") @db.Uuid
+  vacancyId         String?         @map("vacancy_id") @db.Uuid
+  applicationId     String?         @map("application_id") @db.Uuid
+  reason            String
+  comment           String?
+  status            ComplaintStatus @default(OPEN)
+  resolutionComment String?         @map("resolution_comment")
+  resolvedAt        DateTime?       @map("resolved_at") @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  author      User         @relation("ComplaintAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  vacancy     Vacancy?     @relation(fields: [vacancyId], references: [id], onDelete: SetNull)
+  application Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@map("complaints")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
